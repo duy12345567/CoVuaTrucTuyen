@@ -138,6 +138,27 @@ function startPlayerTimer(roomId) {
 
 io.on("connection", (socket) => {
     console.log(`🟢 Người chơi đã kết nối: ${socket.id}`);
+    //xem trận đấu
+    socket.on("spectateGame", ({ roomId }) => {
+        const room = rooms[roomId];
+        if (!room) {
+            socket.emit("spectateFailed", { reason: "not_found", message: "Phòng không tồn tại." });
+            return;
+        }
+
+        socket.join(roomId); // Cho vào phòng để nhận broadcast
+        console.log(`👀 Người xem ${socket.id} đã vào phòng ${roomId}`);
+
+        socket.emit("spectateStarted", {
+            roomId,
+            fen: room.game.fen(),
+            history: room.history,
+            turn: room.turn,
+            whiteTime: room.whiteTime,
+            blackTime: room.blackTime,
+        });
+    });
+
 
     // --- Matchmaking ---
     socket.on("startMatch", () => {
