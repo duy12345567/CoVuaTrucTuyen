@@ -3,7 +3,7 @@ import { io } from "socket.io-client";
 import ChessGame from "./ChessGame"; // Import component ChessGame
 
 // --- Socket Connection ---
-const SERVER_URL = "http://192.168.1.10:5000";
+const SERVER_URL = "http://192.168.1.70:5000";
 
 // Khởi tạo socket nhưng chưa kết nối ngay
 const socket = io(SERVER_URL, {
