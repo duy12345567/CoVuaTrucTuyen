@@ -53,7 +53,6 @@ const ChessGame = ({
         if (!isMyTurnNow || gameOver || opponentDisconnected) return false;
 
         const promotion = piece.toLowerCase().endsWith('p') && ((piece.startsWith('w') && targetSquare[1] === '8') || (piece.startsWith('b') && targetSquare[1] === '1')) ? 'q' : undefined;
-
         const moveConfig = { from: sourceSquare, to: targetSquare, ...(promotion && { promotion }) };
 
         const tempGame = new Chess(game.fen());
@@ -93,7 +92,7 @@ const ChessGame = ({
         }
 
         if (selectedSquare) {
-            const success = onPieceDrop(selectedSquare, square, game.get(selectedSquare).type);
+            onPieceDrop(selectedSquare, square, game.get(selectedSquare).type);
             setSelectedSquare(null);
         }
     };
@@ -118,10 +117,7 @@ const ChessGame = ({
     useEffect(() => {
         const handleOpponentMove = ({ move, fen }) => {
             if (!fen) return;
-            setGame(prevGame => {
-                const currentFen = prevGame.fen();
-                return currentFen !== fen ? new Chess(fen) : prevGame;
-            });
+            safeGameMutate(g => g.load(fen));
             if (move) setHistory(prev => [...prev, move]);
         };
 
@@ -133,8 +129,10 @@ const ChessGame = ({
         };
 
         const handleReceiveMessage = ({ sender, message }) => {
-            setChatMessages(prev => [...prev, { sender, message, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
-            if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+            if (!isSpectator) {
+                setChatMessages(prev => [...prev, { sender, message, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
+                if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+            }
         };
 
         const handleOpponentDisconnected = ({ disconnectedPlayerId }) => {
@@ -143,7 +141,7 @@ const ChessGame = ({
         };
 
         const handlePlayerReconnected = ({ reconnectedPlayerId }) => {
-            if (reconnectedPlayerId !== playerToken) {
+            if (reconnectedPlayerId !== playerToken || isSpectator) {
                 setOpponentDisconnected(false);
                 setOpponentInfo({ id: reconnectedPlayerId, status: 'connected' });
             }
@@ -166,7 +164,7 @@ const ChessGame = ({
             socket.off("opponentDisconnected", handleOpponentDisconnected);
             socket.off("playerReconnected", handlePlayerReconnected);
         };
-    }, [socket, playerToken, roomId]);
+    }, [socket, playerToken, roomId, safeGameMutate, isSpectator]);
 
     const formatTime = (seconds) => {
         if (seconds == null || isNaN(seconds)) return "0:00";
@@ -177,6 +175,8 @@ const ChessGame = ({
 
     const sendMessage = (e) => {
         e.preventDefault();
+        if (isSpectator) return;
+
         if (message.trim() && !gameOver && socket) {
             const msgData = { sender: playerToken, message: message.trim() };
             setChatMessages(prev => [...prev, { ...msgData, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
@@ -187,20 +187,38 @@ const ChessGame = ({
     };
 
     const leaveGame = () => {
-        if (window.confirm("Bạn có chắc muốn rời khỏi ván đấu?")) {
-            if (socket) socket.disconnect();
+        const confirmMessage = isSpectator ? "Bạn có chắc muốn thoát chế độ xem?" : "Bạn có chắc muốn rời khỏi ván đấu?";
+        if (window.confirm(confirmMessage)) {
             setGameActive(false);
-            localStorage.removeItem("chessGameRoomId");
-            localStorage.removeItem("chessPlayerToken");
         }
     };
 
-    const isMyTurn = currentTurn === playerToken && !gameOver && !opponentDisconnected;
+    const isMyTurn = !isSpectator && currentTurn === playerToken && !gameOver && !opponentDisconnected;
+    const gameTurnColor = game.turn();
+
+    let playerWhiteDisplay = "Quân Trắng";
+    let playerBlackDisplay = "Quân Đen";
+
+    if (!isSpectator) {
+        if (boardOrientation === 'white') {
+            playerWhiteDisplay = "Bạn (Trắng)";
+            playerBlackDisplay = "Đối thủ (Đen)";
+        } else {
+            playerWhiteDisplay = "Đối thủ (Trắng)";
+            playerBlackDisplay = "Bạn (Đen)";
+        }
+    }
 
     return (
         <div style={{ display: "flex", justifyContent: "center", gap: "20px", padding: "10px", alignItems: "flex-start" }}>
+            {/* Khu vực bàn cờ và thông tin ván đấu */}
             <div style={{ maxWidth: "580px", width: '100%' }}>
-                {gameOver && <div style={statusBoxStyle(gameOver.result === "draw" ? "gray" : (gameOver.winner === playerToken ? "success" : "danger"))}>
+                <div style={{ textAlign: 'center', marginBottom: '5px', padding: '5px', backgroundColor: '#f0f0f0', borderRadius: '4px', fontSize: '0.9em' }}>
+                    <span style={{ fontWeight: 'bold' }}>Mã phòng:</span> {roomId}
+                    {isSpectator && <span style={{ fontStyle: 'italic', marginLeft: '10px' }}>(Chế độ xem)</span>}
+                </div>
+
+                {gameOver && <div style={statusBoxStyle(gameOver.result === "draw" ? "gray" : ((!isSpectator && gameOver.winner === playerToken) ? "success" : "danger"))}>
                     <h4>{gameOver.message}</h4>
                     {gameOver.reason && <small>(Lý do: {gameOver.reason})</small>}
                 </div>}
@@ -208,9 +226,11 @@ const ChessGame = ({
                     <p>🔌 Đối thủ đã tạm thời ngắt kết nối. Đang chờ kết nối lại...</p>
                 </div>}
 
-                <div style={playerInfoBoxStyle(currentTurn !== playerToken && !gameOver)}>
-                    <span>Đối thủ</span>
-                    <span style={{ fontSize: "20px", fontWeight: 'bold' }}>{formatTime(boardOrientation === 'white' ? blackTime : whiteTime)}</span>
+                <div style={playerInfoBoxStyle(!isSpectator && boardOrientation === 'white' ? isMyTurn : (gameTurnColor === 'w' && !gameOver))}>
+                    <span>{playerWhiteDisplay}</span>
+                    <span style={{ fontSize: "20px", fontWeight: 'bold' }}>
+                        {formatTime(whiteTime)}
+                    </span>
                 </div>
 
                 <div style={{ position: 'relative', width: 'fit-content', margin: '5px auto' }}>
@@ -225,56 +245,78 @@ const ChessGame = ({
                         animationDuration={200}
                         showPromotionDialog={true}
                     />
-                    {(!isMyTurn || gameOver || opponentDisconnected || isSpectator) && (
+                    {(isSpectator || (!isMyTurn && !gameOver) || opponentDisconnected || gameOver) && (
                         <div style={boardOverlayStyle}>
-                            {gameOver ? "Ván đấu đã kết thúc" : opponentDisconnected ? "Đang chờ đối thủ..." : isSpectator ? "Bạn đang xem trận đấu" : "Đến lượt đối thủ"}
+                            {gameOver ? "Ván đấu đã kết thúc" :
+                             isSpectator ? "Bạn đang xem trận đấu" :
+                             opponentDisconnected ? "Đang chờ đối thủ..." :
+                             "Đến lượt đối thủ"}
                         </div>
                     )}
                 </div>
 
-                <div style={playerInfoBoxStyle(currentTurn === playerToken && !gameOver)}>
-                    <span>Bạn</span>
-                    <span style={{ fontSize: "20px", fontWeight: 'bold' }}>{formatTime(boardOrientation === 'white' ? whiteTime : blackTime)}</span>
-                </div>
+                 <div style={playerInfoBoxStyle(!isSpectator && boardOrientation === 'black' ? isMyTurn : (gameTurnColor === 'b' && !gameOver))}>
+                    <span>{playerBlackDisplay}</span>
+                     <span style={{ fontSize: "20px", fontWeight: 'bold' }}>
+                        {formatTime(blackTime)}
+                     </span>
+                 </div>
 
-                {!isSpectator && <div style={{ marginTop: '15px', display: 'flex', justifyContent: 'center' }}>
-                    <button onClick={leaveGame} style={buttonStyle("#dc3545", "white")}>🚪 Rời trận</button>
-                </div>}
+                <div style={{ marginTop: '15px', display: 'flex', justifyContent: 'center' }}>
+                    <button onClick={leaveGame} style={buttonStyle(isSpectator ? "#6c757d" : "#dc3545", "white")}>
+                        {isSpectator ? "🚪 Thoát xem" : "🚪 Rời trận"}
+                    </button>
+                </div>
             </div>
 
-            {!isSpectator && <div style={{ width: "300px", minWidth: "250px", border: "1px solid #ccc", borderRadius: "5px", padding: "10px", display: "flex", flexDirection: "column", height: 'calc(100vh - 60px)', maxHeight: '650px', backgroundColor: '#f8f9fa' }}>
-                <h4 style={{ marginTop: 0, marginBottom: '10px', textAlign: 'center' }}>Chat</h4>
-                <div ref={chatScrollRef} style={{ flexGrow: 1, overflowY: "auto", border: "1px solid #ddd", marginBottom: "10px", padding: "8px", backgroundColor: "#fff", borderRadius: '3px' }}>
-                    {chatMessages.map((msg, index) => (
-                        <div key={index} style={{ marginBottom: "8px", display: 'flex', justifyContent: msg.sender === playerToken ? "flex-end" : "flex-start" }}>
-                            <div style={{
-                                backgroundColor: msg.sender === playerToken ? "#007bff" : "#e9ecef",
-                                color: msg.sender === playerToken ? "white" : "#212529",
-                                padding: "6px 12px",
-                                borderRadius: msg.sender === playerToken ? "15px 15px 0 15px" : "15px 15px 15px 0",
-                                maxWidth: '85%',
-                                wordWrap: 'break-word',
-                                fontSize: '14px',
-                                boxShadow: '0 1px 1px rgba(0,0,0,0.05)'
-                            }}>
-                                {msg.message}
-                                <div style={{ fontSize: '10px', opacity: 0.7, marginTop: '3px', textAlign: msg.sender === playerToken ? 'right' : 'left' }}>{msg.time}</div>
+            {/* Khu vực chat chỉ hiển thị nếu không phải là spectator và nằm cạnh khu vực bàn cờ */}
+            {!isSpectator && (
+                <div style={{
+                    width: "300px",
+                    minWidth: "250px", 
+                    border: "1px solid #ccc",
+                    borderRadius: "5px",
+                    padding: "10px",
+                    display: "flex",
+                    flexDirection: "column",
+                    
+                    height: 'calc(100vh - 60px)', 
+                    maxHeight: '650px', 
+                    backgroundColor: '#f8f9fa'
+                }}>
+                    <h4 style={{ marginTop: 0, marginBottom: '10px', textAlign: 'center' }}>Chat</h4>
+                    <div ref={chatScrollRef} style={{ flexGrow: 1, overflowY: "auto", border: "1px solid #ddd", marginBottom: "10px", padding: "8px", backgroundColor: "#fff", borderRadius: '3px' }}>
+                        {chatMessages.map((msg, index) => (
+                            <div key={index} style={{ marginBottom: "8px", display: 'flex', justifyContent: msg.sender === playerToken ? "flex-end" : "flex-start" }}>
+                                <div style={{
+                                    backgroundColor: msg.sender === playerToken ? "#007bff" : "#e9ecef",
+                                    color: msg.sender === playerToken ? "white" : "#212529",
+                                    padding: "6px 12px",
+                                    borderRadius: msg.sender === playerToken ? "15px 15px 0 15px" : "15px 15px 15px 0",
+                                    maxWidth: '85%',
+                                    wordWrap: 'break-word',
+                                    fontSize: '14px',
+                                    boxShadow: '0 1px 1px rgba(0,0,0,0.05)'
+                                }}>
+                                    {msg.message}
+                                    <div style={{ fontSize: '10px', opacity: 0.7, marginTop: '3px', textAlign: msg.sender === playerToken ? 'right' : 'left' }}>{msg.time}</div>
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        ))}
+                    </div>
+                    <form onSubmit={sendMessage} style={{ display: "flex", gap: "5px" }}>
+                        <input
+                            type="text"
+                            value={message}
+                            onChange={(e) => setMessage(e.target.value)}
+                            placeholder="Nhập tin nhắn..."
+                            style={{ flexGrow: 1, padding: "8px", borderRadius: "5px", border: "1px solid #ccc" }}
+                            disabled={gameOver}
+                        />
+                        <button type="submit" style={buttonStyle("#007bff", "white")} disabled={gameOver}>Gửi</button>
+                    </form>
                 </div>
-                <form onSubmit={sendMessage} style={{ display: "flex", gap: "5px" }}>
-                    <input
-                        type="text"
-                        value={message}
-                        onChange={(e) => setMessage(e.target.value)}
-                        placeholder="Nhập tin nhắn..."
-                        style={{ flexGrow: 1, padding: "8px", borderRadius: "5px", border: "1px solid #ccc" }}
-                        disabled={gameOver}
-                    />
-                    <button type="submit" style={buttonStyle("#007bff", "white")} disabled={gameOver}>Gửi</button>
-                </form>
-            </div>}
+            )}
         </div>
     );
 };
@@ -301,10 +343,12 @@ const statusBoxStyle = (type = "info") => {
     };
 };
 
-const playerInfoBoxStyle = (isTurn) => ({
+const playerInfoBoxStyle = (isHighlightedTurn) => ({
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '8px 12px', border: `1px solid ${isTurn ? '#007bff' : '#ccc'}`, borderRadius: '5px',
-    backgroundColor: isTurn ? '#e7f1ff' : '#f8f9fa'
+    padding: '8px 12px', border: `1px solid ${isHighlightedTurn ? '#007bff' : '#ccc'}`, borderRadius: '5px',
+    backgroundColor: isHighlightedTurn ? '#e7f1ff' : '#f8f9fa',
+    transition: 'background-color 0.3s ease, border-color 0.3s ease',
+    marginBottom: '5px',
 });
 
 const boardOverlayStyle = {
